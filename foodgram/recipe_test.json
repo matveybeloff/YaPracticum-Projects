@@ -1,0 +1,10 @@
+{
+  "ingredients": [
+    {"id": 2, "amount": 150}
+  ],
+  "tags": [1],
+  "image": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABAgMAAABieywaAAAACVBMVEUAAAD///9fX1/S0ecCAAAACklEQVQImWNoAAAAggCByxOyYQAAAABJRU5ErkJggg==",
+  "name": "Омлет",
+  "text": "Взбить и обжарить",
+  "cooking_time": 5
+}

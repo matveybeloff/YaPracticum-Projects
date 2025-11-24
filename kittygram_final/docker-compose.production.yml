@@ -1,0 +1,56 @@
+version: "3.8"
+
+volumes:
+  pg_data:
+  static:
+  media:
+
+services:
+  db:
+    image: postgres:13.10
+    container_name: db
+    env_file: .env
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB -h 127.0.0.1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    image: ${DOCKER_USERNAME:-matveybeloff}/kittygram_backend:latest
+    container_name: backend
+    env_file: .env
+    depends_on:
+      db:
+        condition: service_healthy
+    # backend пишет/читает user-media и читает/кладёт статику в общий том
+    volumes:
+      - static:/static
+      - media:/media
+
+  frontend:
+    image: ${DOCKER_USERNAME:-matveybeloff}/kittygram_frontend:latest
+    container_name: frontend
+    env_file: .env
+    # Собранный фронт перекладываем в общий том со статикой
+    command: sh -lc "cp -r /app/build/. /static/"
+    volumes:
+      - static:/static
+    depends_on:
+      - backend
+
+  gateway:
+    image: ${DOCKER_USERNAME:-matveybeloff}/kittygram_gateway:latest
+    container_name: gateway
+    env_file: .env
+    # Nginx только читает из томов
+    volumes:
+      - static:/static:ro
+      - media:/media:ro
+    ports:
+      - "9000:80"
+    depends_on:
+      - backend
+      - frontend

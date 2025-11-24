@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+
+{% block title %}
+  Создайте короткую ссылку автоматически или предложите свой вариант
+{% endblock title %}
+
+{% block content %}
+  <form method="POST" novalidate>
+    {{ form.csrf_token }}
+    {{ form.original_link(class="form-control form-control-lg py-2 mb-3", placeholder=form.original_link.label.text) }}
+    {% if form.original_link.errors %}
+      <p class="text-danger mb-3">
+        {% for error in form.original_link.errors %}
+          {{ error }}
+        {% endfor %}
+      </p>
+    {% endif %}
+    {{ form.custom_id(class="form-control form-control-lg py-2 mb-3", placeholder=form.custom_id.label.text) }}
+    {% if form.custom_id.errors %}
+      <p class="text-danger mb-3">
+        {% for error in form.custom_id.errors %}
+          {{ error }}
+        {% endfor %}
+      </p>
+    {% endif %}
+    <div class="text-center">
+      {{ form.submit(class="btn btn-primary px-5 py-2") }}
+    </div>
+  </form>
+
+  {% if error_messages %}
+    <div class="mt-4 text-center">
+      {% for message in error_messages %}
+        <h5 class="text-center text-danger">
+          {{ message|safe }}
+        </h5>
+      {% endfor %}
+    </div>
+  {% endif %}
+
+  {% if info_messages %}
+    <div class="mt-4 text-center">
+      {% for message in info_messages %}
+        <h5 class="text-center">
+          {{ message|safe }}
+        </h5>
+      {% endfor %}
+    </div>
+  {% endif %}
+
+  {% if result_messages %}
+    <div class="mt-4 text-center">
+      {% for message in result_messages %}
+        <h5 class="text-center">
+          {{ message|safe }}
+        </h5>
+      {% endfor %}
+    </div>
+  {% endif %}
+{% endblock content %}

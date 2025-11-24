@@ -1,0 +1,275 @@
+name: Foodgram CI/CD
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.11"]
+    services:
+      postgres:
+        image: postgres:13.10
+        env:
+          POSTGRES_USER: django_user
+          POSTGRES_PASSWORD: django_password
+          POSTGRES_DB: django_db
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v3
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Cache pip
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/pip
+          key: pip-${{ runner.os }}-${{ matrix.python-version }}-${{ hashFiles('foodgram/requirements.txt', 'requirements.txt', 'backend/requirements.txt') }}
+      - name: Install dependencies
+        shell: bash
+        run: |
+          set -e
+          python -m pip install --upgrade pip setuptools
+          pip install flake8==6.0.0 flake8-isort==6.0.0
+          REQ=""
+          if [ -f ./foodgram/requirements.txt ]; then REQ=./foodgram/requirements.txt; \
+          elif [ -f ./requirements.txt ]; then REQ=./requirements.txt; \
+          elif [ -f ./backend/requirements.txt ]; then REQ=./backend/requirements.txt; fi
+          if [ -z "$REQ" ]; then echo "requirements.txt not found"; exit 1; fi
+          pip install -r "$REQ"
+      - name: Lint & tests (Django)
+        env:
+          POSTGRES_USER: django_user
+          POSTGRES_PASSWORD: django_password
+          POSTGRES_DB: django_db
+          DB_HOST: 127.0.0.1
+          DB_PORT: 5432
+          DB_ENGINE: postgresql
+        shell: bash
+        run: |
+          set -e
+          BACKEND_DIR="foodgram/backend"
+          [ -d "$BACKEND_DIR" ] || BACKEND_DIR="backend"
+          python -m flake8 "$BACKEND_DIR"/
+          cd "$BACKEND_DIR"/
+          python manage.py test
+
+  build_and_push_backend:
+    name: Push backend Docker image to DockerHub
+    runs-on: ubuntu-latest
+    needs: tests
+    steps:
+      - name: Check out the repo
+        uses: actions/checkout@v3
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+      - name: Login to Docker
+        uses: docker/login-action@v2
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+      - name: Build and push backend (foodgram/ layout)
+        if: ${{ hashFiles('foodgram/backend/Dockerfile') != '' }}
+        uses: docker/build-push-action@v4
+        with:
+          context: ./foodgram
+          file: foodgram/backend/Dockerfile
+          push: true
+          tags: ${{ secrets.DOCKER_USERNAME }}/foodgram_backend:latest
+      - name: Build and push backend (root layout)
+        if: ${{ hashFiles('backend/Dockerfile') != '' && hashFiles('foodgram/backend/Dockerfile') == '' }}
+        uses: docker/build-push-action@v4
+        with:
+          context: .
+          file: backend/Dockerfile
+          push: true
+          tags: ${{ secrets.DOCKER_USERNAME }}/foodgram_backend:latest
+
+  build_and_push_frontend:
+    name: Push frontend Docker image to DockerHub
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repo
+        uses: actions/checkout@v3
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+      - name: Login to Docker
+        uses: docker/login-action@v2
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+      - name: Build and push frontend (foodgram/ layout)
+        if: ${{ hashFiles('foodgram/frontend/Dockerfile', 'foodgram/frontend/package.json') != '' }}
+        uses: docker/build-push-action@v4
+        with:
+          context: ./foodgram/frontend/
+          push: true
+          tags: ${{ secrets.DOCKER_USERNAME }}/foodgram_frontend:latest
+      - name: Build and push frontend (root layout)
+        if: ${{ hashFiles('frontend/Dockerfile', 'frontend/package.json') != '' && hashFiles('foodgram/frontend/package.json') == '' }}
+        uses: docker/build-push-action@v4
+        with:
+          context: ./frontend/
+          push: true
+          tags: ${{ secrets.DOCKER_USERNAME }}/foodgram_frontend:latest
+
+  build_and_push_gateway:
+    name: Push gateway Docker image to DockerHub
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repo
+        uses: actions/checkout@v3
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+      - name: Login to Docker
+        uses: docker/login-action@v2
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+      - name: Build and push gateway (foodgram/ layout)
+        if: ${{ hashFiles('foodgram/nginx/Dockerfile') != '' }}
+        uses: docker/build-push-action@v4
+        with:
+          context: ./foodgram
+          file: foodgram/nginx/Dockerfile
+          push: true
+          tags: ${{ secrets.DOCKER_USERNAME }}/foodgram_gateway:latest
+      - name: Build and push gateway (root layout)
+        if: ${{ hashFiles('nginx/Dockerfile') != '' && hashFiles('foodgram/nginx/Dockerfile') == '' }}
+        uses: docker/build-push-action@v4
+        with:
+          context: ./nginx
+          file: nginx/Dockerfile
+          push: true
+          tags: ${{ secrets.DOCKER_USERNAME }}/foodgram_gateway:latest
+
+  deploy:
+    runs-on: ubuntu-latest
+    needs:
+      - build_and_push_backend
+      - build_and_push_frontend
+      - build_and_push_gateway
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v3
+
+      - name: Copy docker-compose (foodgram/ layout)
+        if: ${{ hashFiles('foodgram/docker-compose.production.yml') != '' }}
+        uses: appleboy/scp-action@master
+        with:
+          host: ${{ secrets.HOST }}
+          username: ${{ secrets.USER }}
+          key: ${{ secrets.SSH_KEY }}
+          passphrase: ${{ secrets.SSH_PASSPHRASE }}
+          source: "foodgram/docker-compose.production.yml"
+          target: "foodgram"
+          strip_components: 1
+
+      - name: Copy docker-compose (root layout)
+        if: ${{ hashFiles('docker-compose.production.yml') != '' && hashFiles('foodgram/docker-compose.production.yml') == '' }}
+        uses: appleboy/scp-action@master
+        with:
+          host: ${{ secrets.HOST }}
+          username: ${{ secrets.USER }}
+          key: ${{ secrets.SSH_KEY }}
+          passphrase: ${{ secrets.SSH_PASSPHRASE }}
+          source: "docker-compose.production.yml"
+          target: "foodgram"
+
+      - name: Copy import data
+        uses: appleboy/scp-action@master
+        with:
+          host: ${{ secrets.HOST }}
+          username: ${{ secrets.USER }}
+          key: ${{ secrets.SSH_KEY }}
+          passphrase: ${{ secrets.SSH_PASSPHRASE }}
+          source: "data"
+          target: "foodgram"
+
+      - name: Create .env on server
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.HOST }}
+          username: ${{ secrets.USER }}
+          key: ${{ secrets.SSH_KEY }}
+          passphrase: ${{ secrets.SSH_PASSPHRASE }}
+          script: |
+            set -e
+            mkdir -p ~/foodgram
+            cd ~/foodgram
+            # Generate SECRET_KEY if not present
+            if [ ! -f .env ]; then touch .env; fi
+            if ! grep -q '^SECRET_KEY=' .env; then
+              if command -v openssl >/dev/null 2>&1; then
+                SECRET_KEY=$(openssl rand -hex 50)
+              else
+                SECRET_KEY=$(head -c 64 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 50)
+              fi
+            else
+              SECRET_KEY=$(grep '^SECRET_KEY=' .env | sed 's/^SECRET_KEY=//')
+            fi
+            cat > .env << EOF
+            SECRET_KEY=$SECRET_KEY
+            DEBUG=False
+            ALLOWED_HOSTS=food.sytes.net,${{ secrets.HOST }},127.0.0.1,localhost
+
+            POSTGRES_DB=django
+            POSTGRES_USER=django_user
+            POSTGRES_PASSWORD=mysecretpassword
+            DB_HOST=db
+            DB_PORT=5432
+
+            STATIC_ROOT=/static
+            MEDIA_ROOT=/media
+            DOCKER_USERNAME=${{ secrets.DOCKER_USERNAME }}
+            EOF
+            chmod 600 .env
+
+      - name: Executing remote ssh commands to deploy
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.HOST }}
+          username: ${{ secrets.USER }}
+          key: ${{ secrets.SSH_KEY }}
+          passphrase: ${{ secrets.SSH_PASSPHRASE }}
+          script: |
+            set -euo pipefail
+            export DOCKER_USERNAME="${{ secrets.DOCKER_USERNAME }}"
+            cd ~/foodgram
+            sudo -v || true
+            sudo docker compose -f docker-compose.production.yml pull
+            sudo docker compose -f docker-compose.production.yml down
+            sudo docker compose -f docker-compose.production.yml up -d
+            sudo docker compose -f docker-compose.production.yml exec -T backend python manage.py migrate --noinput
+            sudo docker compose -f docker-compose.production.yml exec -T backend python manage.py collectstatic --noinput
+            sudo docker compose -f docker-compose.production.yml exec -T backend python manage.py load_tags
+            sudo docker compose -f docker-compose.production.yml cp data/ingredients.csv backend:/app/data/ingredients.csv
+            sudo docker compose -f docker-compose.production.yml exec -T backend python manage.py import_csv
+
+  send_message:
+    runs-on: ubuntu-latest
+    needs: deploy
+    steps:
+      - name: Send message
+        uses: appleboy/telegram-action@master
+        with:
+          to: ${{ secrets.TELEGRAM_TO }}
+          token: ${{ secrets.TELEGRAM_TOKEN }}
+          message: |
+            Деплой выполнен успешно! :)
+            Репозиторий: ${{ github.repository }}
+            Коммит: ${{ github.sha }}
+            Автор: ${{ github.actor }}
+            Сообщение: ${{ github.event.head_commit.message }}
+            Ссылка: https://github.com/${{ github.repository }}/commit/${{ github.sha }}
